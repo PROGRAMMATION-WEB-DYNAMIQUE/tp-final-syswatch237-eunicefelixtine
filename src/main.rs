@@ -160,12 +160,36 @@ fn format_response(snapshot: &SystemSnapshot, command: &str) -> String {
         }
         "all" => format!("{}", snapshot),
         "help" => r#"Commandes disponibles :
-  cpu  - affiche l'utilisation CPU
-  mem  - affiche la mémoire
-  ps   - liste les 5 processus les plus actifs
-  all  - affiche tout (comme l'affichage par défaut)
-  quit - ferme la connexion
-  help - affiche cette aide"#.to_string(),
+  cpu   - affiche l'utilisation CPU
+  mem   - affiche la mémoire
+  ps    - liste les 5 processus les plus actifs
+  all   - affiche tout (comme l'affichage par défaut)
+  shutdown - éteint la machine dans 5 secondes
+  reboot - redémarre la machine dans 5 secondes
+  abort  - annule l'extinction/redémarrage programmé
+  quit  - ferme la connexion
+  help  - affiche cette aide"#.to_string(),
+        "shutdown" => {
+            std::process::Command::new("shutdown")
+                .args(["/s", "/t", "5"])
+                .spawn()
+                .ok();
+            "SHUTDOWN programmé dans 5 secondes.\n".to_string()
+        }
+        "reboot" => {
+            std::process::Command::new("shutdown")
+                .args(["/r", "/t", "5"])
+                .spawn()
+                .ok();
+            "REBOOT programmé dans 5 secondes.\n".to_string()
+        }
+        "abort" => {
+            std::process::Command::new("shutdown")
+                .args(["/a"])
+                .spawn()
+                .ok();
+            "Extinction/redémarrage annulé.\n".to_string()
+        }
         "quit" => "quit".to_string(),
         _ => format!("Commande inconnue : {}\nTape 'help' pour la liste.", command),
     }
@@ -249,9 +273,9 @@ fn main() {
         thread::sleep(Duration::from_secs(5));
     });
 
-    // Lancement du serveur TCP sur le port 7878
+    // Lancement du serveur TCP sur le port 7878 (écoute sur toutes les interfaces)
     let listener = TcpListener::bind("0.0.0.0:7878").expect("Impossible de bind le port 7878");
-    println!("Serveur SysWatch démarré sur 127.0.0.1:7878");
+    println!("Serveur SysWatch démarré sur 0.0.0.0:7878 (accessible depuis le réseau)");
     log_message("Serveur démarré");
 
     for stream in listener.incoming() {
