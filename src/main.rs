@@ -8,6 +8,8 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::fs::OpenOptions;
 
+const AUTH_TOKEN: &str = "ENSPD2026";   // ← token demandé
+
 // --- Types métier ----------------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -80,9 +82,26 @@ impl fmt::Display for SystemSnapshot {
     }
 }
 
+// --- Erreur personnalisée (étape 2) ---------------------------------------
+
+#[derive(Debug)]
+enum SysWatchError {
+    CollectionFailed(String),
+}
+
+impl fmt::Display for SysWatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SysWatchError::CollectionFailed(msg) => write!(f, "Erreur collecte: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for SysWatchError {}
+
 // --- Collecte réelle des métriques ---------------------------------------
 
-fn collect_snapshot() -> Result<SystemSnapshot, String> {
+fn collect_snapshot() -> Result<SystemSnapshot, SysWatchError> {
     let mut sys = System::new_all();
 
     sys.refresh_all();                     // mémoire + processus
@@ -90,7 +109,12 @@ fn collect_snapshot() -> Result<SystemSnapshot, String> {
     sys.refresh_cpu_all();                 // pour sysinfo 0.32+
 
     let cpu_usage = sys.global_cpu_usage();
-    let core_count = sys.physical_core_count().unwrap_or(1);
+    
+    // Vérifier si on a détecté des cœurs CPU
+    let core_count = match sys.physical_core_count() {
+        Some(count) if count > 0 => count,
+        _ => return Err(SysWatchError::CollectionFailed("Aucun cœur CPU détecté".to_string())),
+    };
 
     let total_mb = sys.total_memory() / 1_048_576;
     let used_mb  = sys.used_memory()  / 1_048_576;
@@ -163,14 +187,28 @@ fn log_message(msg: &str) {
     let _ = file.write_all(log_line.as_bytes());
 }
 
-// --- Gestion d'un client (dans son propre thread) ------------------------
+// --- Gestion d'un client (avec authentification) -------------------------
 
 fn handle_client(mut stream: TcpStream, snapshot_arc: Arc<Mutex<SystemSnapshot>>) {
     let addr = stream.peer_addr().unwrap();
     log_message(&format!("Connexion de {}", addr));
     println!("Client connecté : {}", addr);
 
-    let reader = BufReader::new(stream.try_clone().unwrap());
+    // Demander le token
+    let _ = stream.write_all(b"TOKEN: ");
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut token_line = String::new();
+    if reader.read_line(&mut token_line).is_err() || token_line.trim() != AUTH_TOKEN {
+        let _ = stream.write_all(b"UNAUTHORIZED\n");
+        log_message(&format!("Accès refusé pour {}", addr));
+        println!("Accès refusé pour {}", addr);
+        return;
+    }
+    let _ = stream.write_all(b"OK\n");
+    log_message(&format!("Authentifié : {}", addr));
+    println!("Authentifié : {}", addr);
+
+    // Boucle de commandes
     for line in reader.lines() {
         match line {
             Ok(cmd) => {
@@ -212,7 +250,7 @@ fn main() {
     });
 
     // Lancement du serveur TCP sur le port 7878
-    let listener = TcpListener::bind("127.0.0.1:7878").expect("Impossible de bind le port 7878");
+    let listener = TcpListener::bind("0.0.0.0:7878").expect("Impossible de bind le port 7878");
     println!("Serveur SysWatch démarré sur 127.0.0.1:7878");
     log_message("Serveur démarré");
 
